@@ -12,7 +12,8 @@
   <a href="docs/rl-training.md">RL Training</a> •
   <a href="docs/custom-environment.md">Custom Env</a> •
   <a href="docs/configuration.md">Configuration</a> •
-  <a href="docs/data-manager.md">Data</a>
+  <a href="docs/data-manager.md">Data</a> •
+  <a href="./report.pdf">Report</a>
 </p>
 
 <p>
@@ -24,9 +25,9 @@
 
 </div>
 
----
+<!-- --- -->
 
-## 🎬 Demo
+<!-- ## 🎬 Demo -->
 
 <!-- <p align="center">
   <video src="fig/demo_video.mp4" controls width="80%">
@@ -126,6 +127,7 @@ For a detailed usage guide, see [docs/experience-extraction-injection.md](docs/e
 | [Custom Environment](./docs/custom-environment.md) | Step-by-step guide to adding a new environment |
 | [Configuration](./docs/configuration.md) | Full CLI reference and `config.yaml` schema |
 | [Data Manager](./docs/data-manager.md) | Database schema and SQLite query examples |
+| [Report](./report.pdf) | Project report PDF |
 
 ---
 
