@@ -63,38 +63,29 @@ Key strengths:
 ### Installation
 
 ```bash
-git clone https://gitee.pjlab.org.cn/L2/safeai/kilab/AISandbox.git
-cd AIEvoBox
+git clone https://github.com/AI45Lab/Safactory.git
+cd Safactory
 pip install -r requirements.txt
 ```
 
 ### 1 — Evaluate a Model
 
-The example below evaluates a model on the **Android** environment (`android_gym`) in `local` mode.
-
-> **Environment prerequisites (Android / host-native)**:
-> - You have `adb` available on the host (or set `adb_path` in `env/androidgym/android_env.yaml`).
-> - You have a local Android Emulator AVD available for `emulator_name` (default: `nexus_safe`), and `emulator_cmd_path` is `emulator`.
-> - If you use `redroid`, ensure `nerdctl` is installed on the host (the environment will start a redroid container automatically).
-> - The archive mirror includes the dataset file at `env/androidgym/cases.jsonl` (the repository does not ship datasets).
-
-#### Step 1 — Prepare the Android environment
-
-No separate Docker step is required for the default host-native workflow: `launcher.py` will start the emulator when `start_emulator: true`.
-
-#### Step 2 — Run the evaluation
-
 ```bash
 python launcher.py \
-  --mode local \
-  --env-config env/androidgym/android_env.yaml \
-  --llm-base-url http://YOUR_LLM_HOST/v1 \
-  --llm-api-key YOUR_LLM_API_KEY \
-  --llm-model YOUR_MODEL_NAME \
-  --pool-size 1
+  --env-config env/osgym/os_config.yaml \   # Select the evaluation environment (OS / Android / Minecraft, etc.)
+  --llm-base-url http://YOUR_LLM_HOST/v1 \  # Model service address
+  --llm-api-key YOUR_API_KEY \              # API Key
+  --llm-model YOUR_MODEL \                  # Model name
+  --pool-size 1                             # Number of concurrent environment instances
 ```
 
-Results (reward per episode) are printed to the console and saved under a run-specific directory such as `logs/<run-id>/`.
+This command will automatically complete environment loading, task scheduling, and evaluation execution.
+
+**Configuration**
+
+* **CLI parameters**: Control model access and concurrent execution（e.g., `--llm-*`, `--pool-size`）
+
+* **YAML configuration**: Defines specific environments and tasks (e.g., dataset, environment parameters)
 
 ### 2 — Collect Training Data
 
@@ -135,12 +126,6 @@ For a detailed usage guide, see [docs/experience-extraction-injection.md](docs/e
 | [Custom Environment](./docs/custom-environment.md) | Step-by-step guide to adding a new environment |
 | [Configuration](./docs/configuration.md) | Full CLI reference and `config.yaml` schema |
 | [Data Manager](./docs/data-manager.md) | Database schema and SQLite query examples |
-
----
-
-## 🏗️ Architecture
-
-![Architecture diagram](./fig/agentic_sandbox.PNG)
 
 ---
 
