@@ -8,9 +8,12 @@ pkill -9 sglang || true
 sleep 2
 ray stop --force || true
 pkill -9 ray || true
-# Don't kill all python processes to preserve buffer server
-pkill -9 python || true
-sleep 2
+if [[ "${KILL_PYTHON_ON_START:-0}" == "1" ]]; then
+   pkill -9 python || true
+   sleep 2
+else
+   echo "Skipping pkill -9 python. Set KILL_PYTHON_ON_START=1 to restore old cleanup behavior."
+fi
 
 set -ex
 
@@ -126,9 +129,22 @@ RUNTIME_ENV_JSON="{\
   }\
 }"
 
+TRAIN_ENTRYPOINT=(python3)
+
+if [[ "${DEBUG_SLIME_TRAIN:-0}" == "1" ]]; then
+   TRAIN_ENTRYPOINT=(
+      python3 -m debugpy
+      --listen "0.0.0.0:${DEBUGPY_TRAIN_PORT:-5679}"
+      --configure-subProcess True
+   )
+   if [[ "${DEBUGPY_WAIT_FOR_CLIENT:-1}" == "1" ]]; then
+      TRAIN_ENTRYPOINT+=(--wait-for-client)
+   fi
+fi
+
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 ${SLIME_HOME}/train.py \
+   -- "${TRAIN_ENTRYPOINT[@]}" ${SLIME_HOME}/train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
    --colocate \

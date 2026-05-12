@@ -20,4 +20,17 @@ echo "  Host: ${ROLLBUF_HOST}"
 echo "  Port: ${ROLLBUF_PORT}"
 echo "  DB URL: ${AIEVOBOX_DB_URL}"
 
-python3 "${AIEVOBOX_ROOT}/rl/buffer_server.py"
+PYTHON_CMD=(python3)
+
+if [[ "${DEBUG_BUFFER_SERVER:-0}" == "1" ]]; then
+  PYTHON_CMD=(
+    python3 -m debugpy
+    --listen "0.0.0.0:${DEBUGPY_BUFFER_PORT:-5678}"
+    --configure-subProcess True
+  )
+  if [[ "${DEBUGPY_WAIT_FOR_CLIENT:-1}" == "1" ]]; then
+    PYTHON_CMD+=(--wait-for-client)
+  fi
+fi
+
+"${PYTHON_CMD[@]}" "${AIEVOBOX_ROOT}/rl/buffer_server.py"

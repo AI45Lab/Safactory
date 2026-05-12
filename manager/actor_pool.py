@@ -364,7 +364,7 @@ class ActorPool:
                     exc_info=True,
                 )
 
-        max_reset_attempts = 3
+        max_reset_attempts = 1
         cleanup_attempted_for_failure = False
 
         for attempt in range(1, max_reset_attempts + 1):

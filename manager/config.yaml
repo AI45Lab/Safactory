@@ -31,9 +31,9 @@ cluster:
           containerPath: "/mnt/shared-storage-gpfs2/evobox-share-gpfs2"
       resources:
         head:
-          cpu: 18
+          cpu: 12
           gpu: 0
-          memory: 72Gi
+          memory: 48Gi
           privileged: true
       limit: 8
     android_gym:

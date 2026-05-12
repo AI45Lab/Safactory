@@ -2,7 +2,7 @@ environments:
   - env_name: os_gym
     env_image: registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/os-gym:v0.2.0
     env_num: 1
-    dataset: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/kangzeyu/projects/Safactory/datasets/standard/osworld.jsonl  # JSONL dataset file with task configurations
+    dataset: /mnt/shared-storage-user/evobox-share-gpfs2/kangzeyu/projects/Safactory/datasets/standard/osworld.jsonl  # JSONL dataset file with task configurations
     env_params:
       eval_mode: standard  # "standard" or "safety"
       provider_name: "docker"
