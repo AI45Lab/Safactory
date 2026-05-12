@@ -278,7 +278,7 @@ class SqliteStrategy(StorageStrategy):
         limit: int = 100
     ) -> List[Dict]:
         """
-        Fetch completed steps for training data collection.
+        Fetch trainable steps for training data collection.
         Uses cursor-based pagination.
         """
         await self.init()
@@ -313,5 +313,5 @@ class SqliteStrategy(StorageStrategy):
     async def get_max_step_id(self, job_id: str) -> int:
         """Get maximum primary key for pagination"""
         await self.init()
-        latest = await SessionStep.filter(job_id=job_id, is_terminal=True).order_by("-id").first()
+        latest = await SessionStep.filter(job_id=job_id, is_trainable=True).order_by("-id").first()
         return latest.id if latest else 0

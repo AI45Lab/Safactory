@@ -292,11 +292,11 @@ def _get_record_training_info(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def group_by_instance_id(results: List[Dict]) -> List[List[Dict]]:
-    """按 instance_id 将样本分组。
+def group_by_train_group_id(results: List[Dict]) -> List[List[Dict]]:
+    """按 extra_info.train_group_id 将样本分组。
 
     Args:
-        results: 样本列表，每个样本必须包含 instance_id
+        results: 样本列表，每个样本必须包含 extra_info.train_group_id
 
     Returns:
         分组后的样本列表 List[List[Dict]]
@@ -306,12 +306,13 @@ def group_by_instance_id(results: List[Dict]) -> List[List[Dict]]:
 
     groups = {}
     for item in results:
-        instance_id = item.get("instance_id")
-        if instance_id is None:
-            raise ValueError("instance_id must be in item")
-        if instance_id not in groups:
-            groups[instance_id] = []
-        groups[instance_id].append(item)
+        extra_info = item.get("extra_info") or {}
+        train_group_id = str(extra_info.get("train_group_id") or extra_info.get("group_id") or "")
+        if not train_group_id:
+            raise ValueError("extra_info.train_group_id must be in item")
+        if train_group_id not in groups:
+            groups[train_group_id] = []
+        groups[train_group_id].append(item)
 
     return list(groups.values())
 
@@ -354,7 +355,7 @@ async def get_rollout_data(api_base_url: str) -> tuple[List[Dict[str, Any]], Dic
 def start_rollout(api_base_url: str, args, metadata):
     url = f"{api_base_url}/start_rollout"
     print(f"metadata: {metadata}")
-    finished_groups_instance_id_list = [item for sublist in metadata.values() for item in sublist]
+    finished_group_id_list = [item for sublist in metadata.values() for item in sublist]
     restart_training = os.environ.get("SLIME_ROLLBUF_RESTART_TRAINING", "True").strip().lower() == "true"
     payload = {
         "num_process": str(getattr(args, "rollout_num_process", 100)),
@@ -370,7 +371,7 @@ def start_rollout(api_base_url: str, args, metadata):
             "top_p": args.rollout_top_p,
         },
         "tokenizer_path": args.hf_checkpoint,
-        "skip_instance_ids": finished_groups_instance_id_list,
+        "skip_instance_ids": finished_group_id_list,
         "restart_training": restart_training,
     }
     print("start rollout with payload: ", payload)
@@ -503,12 +504,21 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                 metrics.record("fetched/weight_version", float(record["weight_version"]), AggType.MEAN)
             metrics.record("fetched/count", float(len(raw_results)), AggType.SUM)
 
-            # 按 instance_id 分组
-            grouped_results = group_by_instance_id(raw_results)
+            # 按训练 group_id 分组；instance_id 保持为唯一 session_id。
+            grouped_results = group_by_train_group_id(raw_results)
 
             # 按 group 过滤：group 中所有 sample 都必须符合版本要求
             valid_groups = []
             for group in grouped_results:
+                if len(group) != args.n_samples_per_prompt:
+                    train_group_id = (group[0].get("extra_info") or {}).get("train_group_id") if group else None
+                    logger.warning(
+                        "Drop rollout group with unexpected size: train_group_id=%s size=%d expected=%d",
+                        train_group_id,
+                        len(group),
+                        args.n_samples_per_prompt,
+                    )
+                    continue
                 rewards = [record.get("reward") for record in group]
                 if dapo_filter_enabled and len(set(rewards)) == 1:
                     logger.info(
@@ -637,11 +647,11 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
             print(f"[get_rollout_data] Failed to get rollout data: {err}, retry times: {retry_times}")
 
     if len(all_meta_info) > 0 and "finished_groups" in all_meta_info[0]:
-        finished_groups_instance_id_list = []
+        finished_group_id_list = []
         for item in all_meta_info:
-            finished_groups_instance_id_list.extend(item["finished_groups"])
+            finished_group_id_list.extend(item["finished_groups"])
 
-        data_buffer.update_metadata({str(rollout_id): finished_groups_instance_id_list})
+        data_buffer.update_metadata({str(rollout_id): finished_group_id_list})
 
     print("finally buffered trainable group count: ", data_buffer.get_buffer_length())
     if data_buffer.get_buffer_length() < args.rollout_batch_size:

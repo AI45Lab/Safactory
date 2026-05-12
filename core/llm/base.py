@@ -21,6 +21,7 @@ DEFAULT_REQUEST_TIMEOUT_S = 300.0
 SESSION_ROUTED_REQUEST_TIMEOUT_S = 900.0
 DEFAULT_CONNECT_TIMEOUT_S = 100.0
 DEFAULT_STARTUP_JITTER_S = 2.0
+DEFAULT_STEP_MAX_TOKENS = 768
 
 
 def _env_int(name: str, default: int) -> int:
@@ -110,6 +111,7 @@ class LLM:
         request_timeout_s: Optional[float] = None,
         connect_timeout_s: Optional[float] = None,
         sock_read_timeout_s: Optional[float] = None,
+        max_tokens: Optional[int] = None,
         trust_env: bool = True,
         http_client: Optional[HttpClient] = None,
     ) -> None:
@@ -137,6 +139,12 @@ class LLM:
         )
         self.trust_env = bool(http_settings.trust_env)
         self._http_client = http_client
+        resolved_max_tokens = (
+            _env_int("LLM_STEP_MAX_TOKENS", DEFAULT_STEP_MAX_TOKENS)
+            if max_tokens is None
+            else int(max_tokens)
+        )
+        self.max_tokens = resolved_max_tokens if resolved_max_tokens > 0 else None
 
     @staticmethod
     def _parse_response_payload(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,6 +222,8 @@ class LLM:
             "messages": messages,
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
 
         last_error = None
         # max_retries == -1 表示无限重试

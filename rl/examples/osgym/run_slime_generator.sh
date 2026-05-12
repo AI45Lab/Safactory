@@ -27,9 +27,9 @@ export PYTHONBUFFERED=16
 NUM_GPUS=${NUM_GPUS:-4}
 
 SLIME_HOME=${SLIME_HOME:-/root/slime}
-HF_CKPT_DIR="/mnt/shared-storage-user/evobox-share/hf-hub/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203"
-SAVE_DIR="/mnt/shared-storage-user/evobox-share/chenxinquan/slime_checkpoints/Qwen3-VL-2B-Instruct_megatron"
-MODEL_ARGS_ROTARY_BASE=5000000 source "${SLIME_HOME}/scripts/models/qwen3-1.7B.sh"
+HF_CKPT_DIR="/mnt/shared-storage-user/evobox-share/hf-hub/models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+SAVE_DIR="/mnt/shared-storage-user/evobox-share/chenxinquan/slime_checkpoints/Qwen3-VL-8B-Instruct_megatron"
+MODEL_ARGS_ROTARY_BASE=5000000 source "${SLIME_HOME}/scripts/models/qwen3-8B.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint ${HF_CKPT_DIR}
@@ -103,7 +103,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.8
+   --sglang-mem-fraction-static 0.6
    --sglang-attention-backend fa3
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --sglang-log-level info

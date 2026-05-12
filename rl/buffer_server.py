@@ -75,8 +75,11 @@ llm_proxy_url: str = f"http://{_llm_proxy_host}:{_llm_proxy_port}/v1"
 # Track last served step ID for cursor-based pagination
 last_served_id: int = 0
 
-# Pending items by instance_id (for grouping)
-pending_items_by_instance: Dict[str, List[Dict[str, Any]]] = {}
+# Pending step rows by session_id until that session reaches terminal state.
+pending_rows_by_session: Dict[str, List[Dict[str, Any]]] = {}
+
+# Completed sessions by original GRPO group_id.
+completed_sessions_by_group: Dict[str, List[Dict[str, Any]]] = {}
 
 # Group size (set by /start_rollout)
 group_size: int = 1
@@ -108,7 +111,40 @@ def _parse_timestamp(ts: Optional[str]) -> Optional[float]:
             return None
 
 
-def _build_item_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_reward(value: Any) -> float:
+    try:
+        reward = float(value or 0.0)
+    except (TypeError, ValueError):
+        reward = 0.0
+    return max(0.0, min(1.0, reward))
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _row_step_id(row: Dict[str, Any]) -> int:
+    try:
+        return int(row.get("step_id", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_item_from_row(
+    row: Dict[str, Any],
+    *,
+    reward_override: Optional[float] = None,
+    train_group_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Convert a database row to the expected item format."""
     # Parse stored prompt (JSON serialized messages list)
     prompt_str = row.get("prompt", "")
@@ -121,107 +157,189 @@ def _build_item_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
     session_id = row.get("session_id", "")
     env_id = row.get("env_id", "")
     group_id = row.get("group_id", "")
+    is_session_completed = _as_bool(row.get("is_session_completed", False))
 
     # 从 env_state 中解析 weight_version
     weight_version = 0
     if env_state_raw := row.get("env_state"):
-        weight_version = int(json.loads(env_state_raw)["weight_version"])
+        try:
+            weight_version = int(json.loads(env_state_raw).get("weight_version") or 0)
+        except Exception:
+            weight_version = 0
+
+    step_id = _row_step_id(row)
+    truncated = _as_bool(row.get("truncated", False))
+    raw_reward = row.get("total_reward", row.get("reward", 0.0)) if reward_override is None else reward_override
+    reward = _float_or_zero(raw_reward)
+    model_output_truncated = truncated and _float_or_zero(row.get("step_reward", row.get("reward", 0.0))) < 0.0
+    reward = max(0.0, min(1.0, reward))
+    train_group_id = train_group_id or str(group_id)
 
     extra_info = {
         "timestamp": _parse_timestamp(row.get("session_end_time")) or _parse_timestamp(row.get("timestamp")) or time.time(),
-        "steps": row.get("step_id", 0),
+        "steps": step_id,
+        "step_id": step_id,
         # 注意：finish_reason 与 truncated 不完全等价，finish_reason 仅用于训练侧标记截断状态
-        "finish_reason": "length" if row.get("truncated", False) else "stop",
+        "finish_reason": "length" if model_output_truncated else "stop",
         "session_id": session_id,
         "env_id": env_id,
         "group_id": group_id,
+        "train_group_id": train_group_id,
+        "is_session_completed": is_session_completed,
         "weight_version": weight_version,
-        "truncated": row.get("truncated", False),
+        "truncated": truncated,
     }
 
     return {
         "uid": str(uuid.uuid4()),
-        "instance_id": str(group_id),
+        "instance_id": str(session_id),
         "messages": messages,
-        "reward": float(row.get("reward", 0.0)),
+        "reward": reward,
         "extra_info": extra_info,
     }
 
 
 async def fetch_new_items_from_db(limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Fetch new completed steps from the database using cursor-based pagination."""
+    """Fetch new trainable step rows from the database using cursor-based pagination."""
     global data_manager, last_served_id
 
     if data_manager is None:
         return []
 
-    items = []
+    rows = []
     try:
-        rows = await data_manager.fetch_done_steps_with_context(
+        fetched_rows = await data_manager.fetch_done_steps_with_context(
             after_id=last_served_id,
-            limit=limit or 100
+            limit=limit or max(100, group_size * 16)
         )
     except Exception as e:
         logger.error(f"fetch_done_steps_with_context error: {e}")
         return []
 
-    for row in rows:
+    for row in fetched_rows:
         step_pk = row.get("step_pk")
         try:
-            item = _build_item_from_row(row)
-            items.append(item)
-            # Update cursor to the latest processed id
-            if not last_served_id or step_pk > last_served_id:
+            # Always advance the cursor for rows returned by the storage layer.
+            if step_pk is not None and (not last_served_id or step_pk > last_served_id):
                 last_served_id = step_pk
+
+            rows.append(row)
         except Exception as e:
-            logger.error(f"Error building item from row: {e}")
+            logger.error(f"Error reading row: {e}")
             continue
 
-    return items
+    return rows
 
 
-def accumulate_and_pop_ready_groups(new_items: List[Dict[str, Any]]) -> tuple:
-    """Accumulate items and return ready groups."""
-    global pending_items_by_instance, group_size
+def _build_completed_session(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+
+    sorted_rows = sorted(rows, key=_row_step_id)
+    terminal_row = next((row for row in reversed(sorted_rows) if _as_bool(row.get("is_session_completed", False))), sorted_rows[-1])
+    session_id = str(terminal_row.get("session_id") or "")
+    group_id = str(terminal_row.get("group_id") or "")
+    if not session_id or not group_id:
+        return None
+
+    terminal_reward = _normalize_reward(terminal_row.get("total_reward", terminal_row.get("reward", 0.0)))
+    items_by_step: Dict[int, Dict[str, Any]] = {}
+    for row in sorted_rows:
+        step_id = _row_step_id(row)
+        if step_id <= 0:
+            continue
+        train_group_id = f"{group_id}:step:{step_id}"
+        items_by_step[step_id] = _build_item_from_row(
+            row,
+            reward_override=terminal_reward,
+            train_group_id=train_group_id,
+        )
+
+    if not items_by_step:
+        return None
+
+    return {
+        "session_id": session_id,
+        "group_id": group_id,
+        "items_by_step": items_by_step,
+    }
+
+
+def accumulate_and_pop_ready_groups(new_rows: List[Dict[str, Any]]) -> tuple:
+    """Accumulate step rows and return complete per-step GRPO groups."""
+    global pending_rows_by_session, completed_sessions_by_group, group_size
 
     ready_groups = []
-    finished_instance_ids = []
+    ready_group_ids = []
+    finished_session_ids = []
 
-    # Add new items to pending
-    for item in new_items:
-        instance_id = str(item.get("instance_id", ""))
-        if not instance_id:
+    for row in new_rows:
+        session_id = str(row.get("session_id") or "")
+        if not session_id:
             continue
-        pending_items_by_instance.setdefault(instance_id, []).append(item)
+        pending_rows_by_session.setdefault(session_id, []).append(row)
+        if not _as_bool(row.get("is_session_completed", False)):
+            continue
+
+        session_rows = pending_rows_by_session.pop(session_id, [])
+        completed_session = _build_completed_session(session_rows)
+        if completed_session is None:
+            continue
+
+        group_id = completed_session["group_id"]
+        bucket = completed_sessions_by_group.setdefault(group_id, [])
+        if any(existing["session_id"] == session_id for existing in bucket):
+            continue
+        bucket.append(completed_session)
 
     # Check for complete groups
     to_delete = []
-    for instance_id, bucket in pending_items_by_instance.items():
+    for group_id, bucket in completed_sessions_by_group.items():
         while len(bucket) >= group_size:
-            group = bucket[:group_size]
+            session_group = bucket[:group_size]
             del bucket[:group_size]
-            ready_groups.append((instance_id, list(group)))
-            finished_instance_ids.append(instance_id)
+
+            common_steps = set(session_group[0]["items_by_step"].keys())
+            for completed_session in session_group[1:]:
+                common_steps.intersection_update(completed_session["items_by_step"].keys())
+
+            for step_id in sorted(common_steps):
+                train_group_id = f"{group_id}:step:{step_id}"
+                ready_groups.append((
+                    train_group_id,
+                    [completed_session["items_by_step"][step_id] for completed_session in session_group],
+                ))
+
+            ready_group_ids.append(group_id)
+            finished_session_ids.extend(completed_session["session_id"] for completed_session in session_group)
+
         if not bucket:
-            to_delete.append(instance_id)
+            to_delete.append(group_id)
 
     for k in to_delete:
-        pending_items_by_instance.pop(k, None)
+        completed_sessions_by_group.pop(k, None)
 
-    return ready_groups, finished_instance_ids
+    return ready_groups, ready_group_ids, finished_session_ids
 
 
 @app.post("/get_rollout_data", response_model=BufferResponse)
 async def get_rollout_data(request: Request):
-    global pending_items_by_instance
+    global pending_rows_by_session, completed_sessions_by_group
 
-    # Fetch new items from database and accumulate groups
-    new_items = await fetch_new_items_from_db(limit=None)
-    ready_groups, finished_ids = accumulate_and_pop_ready_groups(new_items)
+    # Fetch new step rows from database and accumulate completed sessions.
+    new_rows = await fetch_new_items_from_db(limit=None)
+    ready_groups, finished_group_ids, finished_session_ids = accumulate_and_pop_ready_groups(new_rows)
 
     # Log pending status
-    pending_counts = {k: len(v) for k, v in pending_items_by_instance.items()}
-    logger.info(f"new_items={len(new_items)}, ready_groups={len(ready_groups)}, pending={pending_counts}")
+    pending_step_counts = {k: len(v) for k, v in pending_rows_by_session.items()}
+    completed_session_counts = {k: len(v) for k, v in completed_sessions_by_group.items()}
+    logger.info(
+        "new_rows=%d, ready_groups=%d, pending_steps=%s, completed_sessions=%s",
+        len(new_rows),
+        len(ready_groups),
+        pending_step_counts,
+        completed_session_counts,
+    )
 
     # Flatten groups to items
     ready_items = [item for _, group in ready_groups for item in group]
@@ -246,12 +364,14 @@ async def get_rollout_data(request: Request):
     else:
         max_wv = 0.0
         mean_wv = 0.0
-    finished_groups = list(sorted(set(finished_ids)))
+    finished_groups = list(sorted(set(finished_group_ids)))
+    finished_sessions = list(sorted(set(finished_session_ids)))
 
     meta_info = {
         "total_samples": total_samples,
         "avg_reward": avg_reward,
         "finished_groups": finished_groups,
+        "finished_sessions": finished_sessions,
         "avg_weight_version": mean_wv,
         "max_weight_version": max_wv,
     }
@@ -291,7 +411,7 @@ def start_aievobox_process(data: dict):
     NOTE: LLM Proxy is now hosted in-process by slime_generator.
     It must already be running before this function is called.
     """
-    global aievobox_process, group_size, last_served_id, pending_items_by_instance, data_manager
+    global aievobox_process, group_size, last_served_id, pending_rows_by_session, completed_sessions_by_group, data_manager
 
     # Set group size (num_repeat_per_sample)
     group_size = int(data.get("num_repeat_per_sample", 16))
@@ -299,8 +419,9 @@ def start_aievobox_process(data: dict):
     # Clear state for new rollout
     restart_training = data.get("restart_training", False)
     if restart_training:
-        pending_items_by_instance.clear()
-        logger.info("restart_training=True, cleared pending items")
+        pending_rows_by_session.clear()
+        completed_sessions_by_group.clear()
+        logger.info("restart_training=True, cleared pending rollout state")
 
     # Keep a single job_session for both reader and writer process.
     job_session = str(data.get("job_session") or uuid.uuid4().hex)

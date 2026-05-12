@@ -262,7 +262,8 @@ class CloudStrategy(StorageStrategy):
             meta_json=json.dumps({
                 "source": "AIEvoBox",
                 "group_id": session.group_id,
-                "env_state": env_state
+                "env_state": env_state,
+                "is_trainable": bool(is_trainable),
             })
         )
         
@@ -505,7 +506,7 @@ class CloudStrategy(StorageStrategy):
         limit: int = 100
     ) -> List[Dict]:
         """
-        Fetch completed steps for training data collection.
+        Fetch trainable steps for training data collection.
         Uses cursor-based pagination.
         """
         await self.init()
@@ -514,7 +515,7 @@ class CloudStrategy(StorageStrategy):
             dataset_type="Test",
             cursor=after_id,
             checkout_latest=True,
-            where_sql="job_id = '{}' AND is_terminal = True".format(job_id),
+            where_sql="job_id = '{}'".format(job_id),
             limit=limit,
         )
         
@@ -526,13 +527,16 @@ class CloudStrategy(StorageStrategy):
         
         rows = []
         for _, row in results.iterrows():
+            meta_json = json.loads(row["meta_json"]) if row["meta_json"] else {}
+            if meta_json.get("is_trainable") is False:
+                continue
             rows.append(
                 {
                     "step_pk": cursor,
                     "step_id": row["step_id"],
                     "env_name": row["env_name"],
                     "env_id": row["session_id"],
-                    "env_state": json.loads(row["meta_json"]).get("env_state") if row["meta_json"] else None,
+                    "env_state": meta_json.get("env_state"),
                     "prompt": self.normalize_messages(row["messages"]),
                     "response": row["response"]["content"].tolist()[0]["text"],
                     "reward": row["reward"],
@@ -540,7 +544,7 @@ class CloudStrategy(StorageStrategy):
                     "total_reward": row["reward"],
                     "session_id": row["session_id"],
                     "session_end_time": row["created_at"] if row["created_at"] else None,
-                    "group_id": json.loads(row["meta_json"]).get("group_id") if row["meta_json"] else None,
+                    "group_id": meta_json.get("group_id"),
                     "truncated": row["is_truncated"],
                     "is_session_completed": row["is_session_completed"], 
                 }
@@ -552,7 +556,7 @@ class CloudStrategy(StorageStrategy):
         await self.init()
         
         last_cursor = self.client.get_max_created_at(
-            where_sql="dataset_type = 'Test' AND job_id = '{}' AND is_terminal = True".format(job_id),
+            where_sql="dataset_type = 'Test' AND job_id = '{}'".format(job_id),
         )
         
         return last_cursor
