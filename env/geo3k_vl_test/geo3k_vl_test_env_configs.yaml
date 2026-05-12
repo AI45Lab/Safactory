@@ -1,6 +1,6 @@
 environments:
   - env_name: geo3k_vl_test
     env_num: 1
-    dataset: path/to/geo3k_vl_train.parquet
+    dataset: /mnt/shared-storage-user/evobox-share/hf-hub/datasets--VeraIsHere--geo3k_imgurl_processed/snapshots/53ff8fbb1f9758b9efbc005e9487e1fdd874364a/train.parquet
     env_params: {}
     # Runtime options are loaded from geo3k_vl_test_env_runtime.yaml by default.

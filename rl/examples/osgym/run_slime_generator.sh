@@ -24,7 +24,7 @@ LLM_PROXY_URL="http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}"
 
 export WANDB_MODE=offline
 export PYTHONBUFFERED=16
-NUM_GPUS=${NUM_GPUS:-8}
+NUM_GPUS=${NUM_GPUS:-4}
 
 SLIME_HOME=${SLIME_HOME:-/root/slime}
 HF_CKPT_DIR="/mnt/shared-storage-user/evobox-share/hf-hub/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203"
@@ -55,14 +55,14 @@ ROLLOUT_ARGS=(
 MEGATRON_ARGS=(
    --train-backend megatron
    --megatron-to-hf-mode bridge
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
-   --recompute-granularity full
-   --recompute-method uniform
-   --recompute-num-layers 1
+   # --recompute-granularity full
+   # --recompute-method uniform
+   # --recompute-num-layers 1
    --attention-dropout 0.0
    --hidden-dropout 0.0
    --accumulate-allreduce-grads-in-fp32
@@ -72,7 +72,7 @@ MEGATRON_ARGS=(
 
 TRAIN_ARGS=(
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 5000
+   --max-tokens-per-gpu 40000
    --calculate-per-token-loss
 )
 
@@ -103,16 +103,16 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.7
+   --sglang-mem-fraction-static 0.8
    --sglang-attention-backend fa3
-   # --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --sglang-log-level info
    --sglang-log-level-http error
 )
 
 # Start Ray
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats
 
 export SGLANG_LOGGING_CONFIG_PATH=${SGLANG_LOGGING_CONFIG_PATH:-"/mnt/shared-storage-user/chenxinquan/Safactory/rl/sglang_logging.json"}
 
@@ -130,8 +130,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 ${SLIME_HOME}/train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 1 \
-   --rollout-num-gpus 7 \
+   --actor-num-gpus-per-node 4 \
+   --colocate \
    ${MODEL_ARGS[@]} \
    ${MEGATRON_ARGS[@]} \
    ${CKPT_ARGS[@]} \

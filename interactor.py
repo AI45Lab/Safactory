@@ -412,7 +412,7 @@ class Interactor:
 
                 if finish_reason == "length":
                     log.info("worker=%d env=%s step=%d: LLM output truncated, terminating.", worker_id, env_key, step_i)
-                    reward = 0.0
+                    reward = -0.1
                     terminated = True
                     truncated = True
                     is_trainable = True

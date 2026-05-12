@@ -22,12 +22,13 @@ source "${SCRIPT_DIR}/env.sh"
 ROLLOUT_BUFFER_URL="http://${BUFFER_SERVER_HOST}:${BUFFER_SERVER_PORT}"
 LLM_PROXY_URL="http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}"
 
+export WANDB_MODE=offline
 export PYTHONBUFFERED=16
 NUM_GPUS=${NUM_GPUS:-8}
 
 SLIME_HOME=${SLIME_HOME:-/root/slime}
-HF_CKPT_DIR="/root/.cache/huggingface/hub/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203"
-SAVE_DIR="/mnt/shared-storage-user/evobox-share-gpfs2/yinzhenyun/slime/checkpoints/Qwen3-VL-2B-Instruct_megatron"
+HF_CKPT_DIR="/mnt/shared-storage-user/evobox-share/hf-hub/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203"
+SAVE_DIR="/mnt/shared-storage-user/evobox-share/chenxinquan/slime_checkpoints/Qwen3-VL-2B-Instruct_megatron"
 MODEL_ARGS_ROTARY_BASE=5000000 source "${SLIME_HOME}/scripts/models/qwen3-1.7B.sh"
 
 CKPT_ARGS=(
@@ -95,9 +96,9 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
     --use-wandb
     --wandb-project slime
-    --wandb-team aievobox
+   #  --wandb-team aievobox
     --wandb-group slime
-    --wandb-dir /root/wandb_logs
+    --wandb-dir /mnt/shared-storage-user/evobox-share/chenxinquan/wandb_logs
     --wandb-always-use-train-step
 )
 
@@ -114,7 +115,7 @@ SGLANG_ARGS=(
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats
 
-export SGLANG_LOGGING_CONFIG_PATH=${SGLANG_LOGGING_CONFIG_PATH:-"/root/AIEvoBox/rl/sglang_logging.json"}
+export SGLANG_LOGGING_CONFIG_PATH=${SGLANG_LOGGING_CONFIG_PATH:-"/mnt/shared-storage-user/chenxinquan/Safactory/rl/sglang_logging.json"}
 
 RUNTIME_ENV_JSON="{\
   \"env_vars\": {\

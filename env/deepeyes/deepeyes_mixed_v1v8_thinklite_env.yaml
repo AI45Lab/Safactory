@@ -2,7 +2,7 @@ environments:
   - env_name: deepeyes_env
     env_image: ""
     env_num: 1
-    dataset: /root/.cache/huggingface/hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_0.1.2_visual_toolbox_v2.parquet
+    dataset: /mnt/shared-storage-user/evobox-share/hf-hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_0.1.2_visual_toolbox_v2.parquet
     dataset_load_mode: parquet_row_ref
     env_params: {}
     # visual_toolbox_v2 | data_source=vstar | 22362 rows
@@ -10,7 +10,7 @@ environments:
   - env_name: deepeyes_env
     env_image: ""
     env_num: 1
-    dataset: /root/.cache/huggingface/hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_v0.8_visual_toolbox_v2.parquet
+    dataset: /mnt/shared-storage-user/evobox-share/hf-hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_v0.8_visual_toolbox_v2.parquet
     dataset_load_mode: parquet_row_ref
     env_params: {}
     # visual_toolbox_v2 | data_source=chart | 13659 rows
@@ -18,7 +18,7 @@ environments:
   - env_name: deepeyes_env
     env_image: ""
     env_num: 1
-    dataset: /root/.cache/huggingface/hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_thinklite_reasoning_acc.parquet
+    dataset: /mnt/shared-storage-user/evobox-share/hf-hub/datasets--ChenShawn--DeepEyes-Datasets-47k/snapshots/5546681e28fa2eda9f60a9ea9dd0cf291216ded3/data_thinklite_reasoning_acc.parquet
     dataset_load_mode: parquet_row_ref
     env_params: {}
     # thinklite_eureka | data_source=thinklite_eureka | 11031 rows
