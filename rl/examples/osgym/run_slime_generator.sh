@@ -8,12 +8,7 @@ pkill -9 sglang || true
 sleep 2
 ray stop --force || true
 pkill -9 ray || true
-if [[ "${KILL_PYTHON_ON_START:-0}" == "1" ]]; then
-   pkill -9 python || true
-   sleep 2
-else
-   echo "Skipping pkill -9 python. Set KILL_PYTHON_ON_START=1 to restore old cleanup behavior."
-fi
+pkill -9 python || true
 
 set -ex
 
@@ -27,6 +22,9 @@ LLM_PROXY_URL="http://${LLM_PROXY_HOST}:${LLM_PROXY_PORT}"
 
 export WANDB_MODE=offline
 export PYTHONBUFFERED=16
+export DEBUG_SLIME_ROLLOUT=${DEBUG_SLIME_ROLLOUT:-0}
+export DEBUGPY_ROLLOUT_PORT=${DEBUGPY_ROLLOUT_PORT:-5681}
+export DEBUGPY_WAIT_FOR_CLIENT=${DEBUGPY_WAIT_FOR_CLIENT:-1}
 NUM_GPUS=${NUM_GPUS:-4}
 
 SLIME_HOME=${SLIME_HOME:-/root/slime}
@@ -106,7 +104,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.6
+   --sglang-mem-fraction-static 0.85
    --sglang-attention-backend fa3
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --sglang-log-level info
@@ -119,6 +117,8 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-s
 
 export SGLANG_LOGGING_CONFIG_PATH=${SGLANG_LOGGING_CONFIG_PATH:-"/mnt/shared-storage-user/chenxinquan/Safactory/rl/sglang_logging.json"}
 
+echo "Debug settings: DEBUG_SLIME_TRAIN=${DEBUG_SLIME_TRAIN:-0}, DEBUG_SLIME_ROLLOUT=${DEBUG_SLIME_ROLLOUT}, DEBUGPY_ROLLOUT_PORT=${DEBUGPY_ROLLOUT_PORT}, DEBUGPY_WAIT_FOR_CLIENT=${DEBUGPY_WAIT_FOR_CLIENT}"
+
 RUNTIME_ENV_JSON="{\
   \"env_vars\": {\
     \"PYTHONPATH\": \"${SLIME_HOME}:${AIEVOBOX_ROOT}/rl:${AIEVOBOX_ROOT}:/root/Megatron-LM\",\
@@ -126,9 +126,9 @@ RUNTIME_ENV_JSON="{\
     \"LLM_PROXY_URL\": \"${LLM_PROXY_URL}\",\
     \"ROLLOUT_BUFFER_URL\": \"${ROLLOUT_BUFFER_URL}\",\
     \"SLIME_OFF_BY_N\": \"${SLIME_OFF_BY_N:-0}\",\
-    \"DEBUG_SLIME_ROLLOUT\": \"${DEBUG_SLIME_ROLLOUT:-0}\",\
-    \"DEBUGPY_ROLLOUT_PORT\": \"${DEBUGPY_ROLLOUT_PORT:-5681}\",\
-    \"DEBUGPY_WAIT_FOR_CLIENT\": \"${DEBUGPY_WAIT_FOR_CLIENT:-1}\"\
+    \"DEBUG_SLIME_ROLLOUT\": \"${DEBUG_SLIME_ROLLOUT}\",\
+    \"DEBUGPY_ROLLOUT_PORT\": \"${DEBUGPY_ROLLOUT_PORT}\",\
+    \"DEBUGPY_WAIT_FOR_CLIENT\": \"${DEBUGPY_WAIT_FOR_CLIENT}\"\
   }\
 }"
 
@@ -149,8 +149,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- "${TRAIN_ENTRYPOINT[@]}" ${SLIME_HOME}/train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
-   --colocate \
+   --actor-num-gpus-per-node 1 \
+   --rollout-num-gpus 3 \
    ${MODEL_ARGS[@]} \
    ${MEGATRON_ARGS[@]} \
    ${CKPT_ARGS[@]} \

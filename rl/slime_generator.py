@@ -55,7 +55,10 @@ def _maybe_wait_for_rollout_debugger() -> None:
 
     if _ROLLOUT_DEBUGPY_STARTED:
         return
-    if os.getenv("DEBUG_SLIME_ROLLOUT", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+    debug_flag = os.getenv("DEBUG_SLIME_ROLLOUT", "0")
+    if debug_flag.strip().lower() not in {"1", "true", "yes", "on"}:
+        _ROLLOUT_DEBUGPY_STARTED = True
+        print(f"[debugpy] rollout debugger disabled: DEBUG_SLIME_ROLLOUT={debug_flag!r}", flush=True)
         return
 
     port = int(os.getenv("DEBUGPY_ROLLOUT_PORT", "5681"))
@@ -73,6 +76,7 @@ def _maybe_wait_for_rollout_debugger() -> None:
             print("[debugpy] rollout debugger attached", flush=True)
     except Exception as exc:
         _ROLLOUT_DEBUGPY_STARTED = True
+        print(f"[debugpy] failed to start rollout debugger on port {port}: {exc}", flush=True)
         logger.warning("Failed to start rollout debugpy listener on port %s: %s", port, exc)
 
 

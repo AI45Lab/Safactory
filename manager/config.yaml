@@ -4,7 +4,7 @@ database:
   driver: "sqlite"
   sqlite_path: "AIEvoBox/test_envs.db"    # Change this to your actual DB path
 
-pool_size: 64
+pool_size: 32
 
 cluster:
   base_image: "AAAA" # TODO the base image should be deleted, we will have distinguished image for each env
@@ -31,11 +31,11 @@ cluster:
           containerPath: "/mnt/shared-storage-gpfs2/evobox-share-gpfs2"
       resources:
         head:
-          cpu: 12
+          cpu: 48
           gpu: 0
-          memory: 48Gi
+          memory: 192Gi
           privileged: true
-      limit: 8
+      limit: 32
     android_gym:
       quotagroup: "evobox_cpu_task"
       entrypoint: "bash /mnt/shared-storage-user/chenxinquan/AIEvoBox/env/androidgym/run.sh"

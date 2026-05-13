@@ -11,8 +11,9 @@ environments:
       prompt_observation_type: screenshot # Controls what is fed into the model prompt
       headless: true
       action_space: "pyautogui"
-      screen_width: 1920
-      screen_height: 1080
+      prompt_format: qwen
+      screen_width: 1280
+      screen_height: 960
       cache_dir: "/tmp/osgym_cache"
       result_dir: /mnt/shared-storage-user/chenxinquan/Safactory/result  # Relative to env/osgym directory
       save_screenshots: true
