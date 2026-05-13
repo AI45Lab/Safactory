@@ -10,10 +10,7 @@ from slime.utils.processing_utils import encode_image_for_rollout_engine
 logger = logging.getLogger(__name__)
 THINK_BLOCK_RE = re.compile(r"\s*<think>.*?</think>\s*", re.DOTALL)
 
-BASE_CHAT_HISTORY = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "I am a user."},
-]
+BASE_CHAT_HISTORY = []
 
 
 @dataclass
@@ -43,22 +40,26 @@ class TrajectoryMaskBuilder:
         self.tokenizer = tokenizer
         self.processor = processor
         self.session_roots: Dict[str, MessageNode] = {}
-        self.base_messages_str = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
-            add_generation_prompt=False,
-            tokenize=False,
-        )
+        if BASE_CHAT_HISTORY:
+            self.base_messages_str = self.tokenizer.apply_chat_template(
+                BASE_CHAT_HISTORY,
+                add_generation_prompt=False,
+                tokenize=False,
+            )
+        else:
+            self.base_messages_str = ""
         self.generation_tokens = self._init_generation_tokens()
         self.suffix = self._init_suffix_tokens()
 
     def _init_generation_tokens(self) -> List[int]:
+        test_conversation = BASE_CHAT_HISTORY + [{"role": "user", "content": "hi"}]
         without_gen = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
+            test_conversation,
             add_generation_prompt=False,
             tokenize=False,
         )
         with_gen = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
+            test_conversation,
             add_generation_prompt=True,
             tokenize=False,
         )
@@ -70,8 +71,12 @@ class TrajectoryMaskBuilder:
         if eos_id is None:
             return []
 
+        test_conversation = BASE_CHAT_HISTORY + [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "response"},
+        ]
         test_tokens = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY + [{"role": "assistant", "content": "response"}],
+            test_conversation,
             add_generation_prompt=False,
             tokenize=True,
         )

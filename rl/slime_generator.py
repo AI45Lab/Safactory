@@ -43,9 +43,37 @@ TOKENIZER = None
 TRAJECTORY_MASK_BUILDER = None
 START_ROLLOUT = True
 _LLM_PROXY_STARTED = False
+_ROLLOUT_DEBUGPY_STARTED = False
 _TRAININFO_EXECUTOR: Optional[ThreadPoolExecutor] = None
 
 _llm_proxy_port = int(get_env("LLM_PROXY_PORT"))
+
+
+def _maybe_wait_for_rollout_debugger() -> None:
+    """Open a debugpy port inside the Ray worker that runs generate_rollout."""
+    global _ROLLOUT_DEBUGPY_STARTED
+
+    if _ROLLOUT_DEBUGPY_STARTED:
+        return
+    if os.getenv("DEBUG_SLIME_ROLLOUT", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+
+    port = int(os.getenv("DEBUGPY_ROLLOUT_PORT", "5681"))
+    wait_for_client = os.getenv("DEBUGPY_WAIT_FOR_CLIENT", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+    try:
+        import debugpy
+
+        debugpy.listen(("0.0.0.0", port))
+        _ROLLOUT_DEBUGPY_STARTED = True
+        print(f"[debugpy] rollout worker listening on 0.0.0.0:{port}", flush=True)
+        if wait_for_client:
+            print(f"[debugpy] waiting for rollout debugger on port {port}", flush=True)
+            debugpy.wait_for_client()
+            print("[debugpy] rollout debugger attached", flush=True)
+    except Exception as exc:
+        _ROLLOUT_DEBUGPY_STARTED = True
+        logger.warning("Failed to start rollout debugpy listener on port %s: %s", port, exc)
 
 
 def _resolve_traininfo_workers() -> int:
@@ -681,6 +709,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     """Generate rollout for both training and evaluation."""
     global START_ROLLOUT
+
+    _maybe_wait_for_rollout_debugger()
 
     # Initialize tokenizer + processor + llm_proxy HTTP server (once).
     # Must happen BEFORE start_rollout, because buffer_server will launch
