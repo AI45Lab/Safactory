@@ -529,13 +529,14 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
             print(f"✅ Valid groups collected this round: {len(valid_groups)}")
 
             sample_results = []
+            # 包含所有本轮拉到的 session（含被 dapo / off_by_n 过滤掉的 group）
             touched_session_ids = set()
+            for record in raw_results:
+                session_id = record.get("extra_info", {}).get("session_id", "")
+                if session_id:
+                    touched_session_ids.add(session_id)
             try:
                 flat_records = [record for group_record in valid_groups for record in group_record]
-                for record in flat_records:
-                    session_id = record["extra_info"].get("session_id", "")
-                    if session_id:
-                        touched_session_ids.add(session_id)
 
                 loop = asyncio.get_running_loop()
                 traininfo_executor = _get_traininfo_executor()

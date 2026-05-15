@@ -2,7 +2,7 @@ environments:
   - env_name: os_gym
     env_image: registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/os-gym:v0.2.0
     env_num: 1
-    dataset: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/kangzeyu/datasets/standard/osworld_cases_latest.jsonl  # JSONL dataset file with task configurations
+    dataset: /mnt/shared-storage-user/evobox-share-gpfs2/kangzeyu/projects/Safactory/datasets/standard/osworld.jsonl  # JSONL dataset file with task configurations
     env_params:
       eval_mode: standard  # "standard" or "safety"
       provider_name: "docker"
@@ -11,11 +11,11 @@ environments:
       prompt_observation_type: screenshot # Controls what is fed into the model prompt
       headless: true
       action_space: "pyautogui"
-      prompt_format: kimi
+      prompt_format: qwen
       screen_width: 1920
       screen_height: 1080
       cache_dir: "/tmp/osgym_cache"
-      result_dir: /mnt/shared-storage-gpfs2/evobox-share-gpfs2/kangzeyu/standard_results_v1.4/osgym_kimi-k2.5_standard_osworld_cases_latest_rollout_1  # Relative to env/osgym directory
+      result_dir: os_res  # Relative to env/osgym directory
       save_screenshots: true
       sleep_after_execution: 2.0
       max_steps: 30

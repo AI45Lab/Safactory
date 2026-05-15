@@ -10,9 +10,9 @@ cluster:
   base_image: "AAAA" # TODO the base image should be deleted, we will have distinguished image for each env
   http:                    #shared, all the env services export the same port for connection
     port: 36663
-    timeout_s: 100         # Connection timeouts from manager to env clusters
+    timeout_s: 300         # Connection timeouts from manager to env clusters
     concurrency: 200       # Max concurrent HTTP calls from manager when prewarming actors
-    startup_concurrency: 16  # Max concurrent cold starts / reset attempts during prewarm
+    startup_concurrency: 8  # Max concurrent cold starts / reset attempts during prewarm
   env_types:
     mc:
       quotagroup: "evobox_cpu_task"
@@ -31,11 +31,11 @@ cluster:
           containerPath: "/mnt/shared-storage-gpfs2/evobox-share-gpfs2"
       resources:
         head:
-          cpu: 18
+          cpu: 48
           gpu: 0
-          memory: 72Gi
+          memory: 192Gi
           privileged: true
-      limit: 12
+      limit: 32
     android_gym:
       quotagroup: "evobox_cpu_task"
       entrypoint: "bash /mnt/shared-storage-user/chenxinquan/AIEvoBox/env/androidgym/run.sh"
@@ -58,8 +58,8 @@ cluster:
 rayjob:
   domain: "https://h.pjlab.org.cn"
   tenant: "ailab"
-  access_key: "0190c46827d4f2cd6632607bc1c2a0ca"
-  secret_key: "8cf77e57dd77c977f4a59d43a507ebd1"
+  access_key: "9df705a19784ba2d8196d15b393f2eab"
+  secret_key: "d5285d99b567ab7e390d4e397ca42ee9"
   token: ""
   verify: false                        # Whether to verify TLS certificates (set true in production)
   quotagroup: "evobox_cpu_task"        # Default quotagroup for all envs

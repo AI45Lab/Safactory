@@ -304,6 +304,9 @@ def start_aievobox_process(data: dict):
 
     # Keep a single job_session for both reader and writer process.
     job_session = str(data.get("job_session") or uuid.uuid4().hex)
+    
+    # Mode
+    mode = os.environ.get("AIEVOBOX_MODE", "local")
 
     # Database path
     storage_type = os.environ.get("STORAGE_TYPE", "sqlite")
@@ -331,9 +334,11 @@ def start_aievobox_process(data: dict):
     pool_size = int(get_env("AIEVOBOX_POOL_SIZE") or 16)
     rl_epoch = int(get_env("RL_EPOCH") or 1)
     env_transport = os.environ.get("AIEVOBOX_ENV_TRANSPORT", "http")
+    multiplier = os.environ.get("AIEVOBOC_MULTIPLIER", 1.2)
 
     cmd = [
         "python3", launcher_script,
+        "--mode", mode,
         "--db-path", db_url,
         "--storage-type", storage_type,
         *(["--env-config", env_config] if env_config else ["--env-root", env_root]),
@@ -343,12 +348,14 @@ def start_aievobox_process(data: dict):
         "--max-steps", str(max_steps),
         "--message-cut", str(message_cut),
         "--pool-size", str(pool_size),
+        "--multiplier", str(multiplier),
         "--job-id", job_session,
         "--no-rebuild-table",
         "--rl-use-session-suffix-url",
         "--rl-group-size", str(group_size),
         "--rl-epoch", str(rl_epoch),
         "--env-transport", env_transport,
+        "--env-http-timeout-s", "600",
     ]
 
     logger.info(f"Starting launcher.py: {' '.join(cmd)}")
