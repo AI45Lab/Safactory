@@ -118,8 +118,16 @@ def build_run_id(run_name: Optional[str] = None) -> str:
 
 
 def build_log_session(log_dir: str, run_name: Optional[str]) -> LauncherLogSession:
-    run_id = build_run_id(run_name)
-    run_dir = os.path.join(log_dir, run_id)
+    # If a session leader (e.g. buffer_server) has already registered a run
+    # directory via AIEVOBOX_RUN_DIR, reuse it so main.log lands beside
+    # buffer_server.log / llm_proxy.log instead of in a sibling timestamp dir.
+    env_run_dir = os.environ.get("AIEVOBOX_RUN_DIR")
+    if env_run_dir:
+        run_dir = env_run_dir
+        run_id = os.path.basename(os.path.normpath(run_dir)) or build_run_id(run_name)
+    else:
+        run_id = build_run_id(run_name)
+        run_dir = os.path.join(log_dir, run_id)
     os.makedirs(run_dir, exist_ok=True)
     return LauncherLogSession(
         run_id=run_id,

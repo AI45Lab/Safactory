@@ -19,7 +19,20 @@ _MASK_DIR = os.path.join(_SCRIPT_DIR, "mask")
 if _MASK_DIR not in sys.path:
     sys.path.insert(0, _MASK_DIR)
 
-from utils import get_env, AggType, MetricsRecorder
+from rl.utils import (
+    get_env,
+    AggType,
+    MetricsRecorder,
+    RolloutGroupDebugLogger,
+    STATUS_KEPT,
+    STATUS_DAPO_ALL_SAME,
+    STATUS_WEIGHT_VERSION_SKEW,
+    STATUS_DROP_UNMATCHED_TRAJECTORY,
+    STATUS_DROP_ASSEMBLY_ERROR,
+    get_or_create_run_dir,
+    setup_process_logging,
+    start_debugpy,
+)
 
 import aiohttp
 import requests
@@ -30,6 +43,17 @@ from transformers import AutoProcessor, PreTrainedTokenizerBase, ProcessorMixin
 from slime.utils.async_utils import run
 from slime.utils.types import Sample
 
+# Set up shared root logging *before* importing llm_proxy / mask builder so
+# their logger.info / logger.warning calls land in the run dir alongside
+# slime_generator's own output. buffer_server has already created the run
+# dir (it's the session leader); we only ever discover it here.
+_AIEVOBOX_ROOT_FOR_LOGGING = os.environ.get("AIEVOBOX_ROOT") or os.getcwd()
+RUN_DIR = setup_process_logging(
+    "slime_generator",
+    logs_root=os.path.join(_AIEVOBOX_ROOT_FOR_LOGGING, "logs"),
+    create_new_run_dir=False,
+)
+
 import llm_proxy as _llm_proxy_module
 from trajectory_mask_builder import TrajectoryMaskBuilder
 from opd.teacher_log_probs import attach_teacher_log_probs
@@ -37,6 +61,11 @@ from opd.teacher_log_probs import attach_teacher_log_probs
 __all__ = ["generate_rollout"]
 
 logger = logging.getLogger(__name__)
+logger.info("slime_generator logging initialized: run_dir=%s pid=%d", RUN_DIR, os.getpid())
+
+# debugpy listener for slime_generator + the in-process llm_proxy.
+# Same process, so a single attach lets you breakpoint in both files.
+start_debugpy("slime_rollout", default_port=5681)
 
 # Global variables
 TOKENIZER = None
@@ -136,8 +165,9 @@ def write_debug_to_file(
     response_length: int,
 ):
     """将训练数据的调试信息写入文件。"""
-    debug_dir = os.path.join(get_env("AIEVOBOX_ROOT"), "logs")
-    os.makedirs(debug_dir, exist_ok=True)
+    debug_dir = get_or_create_run_dir(
+        os.path.join(get_env("AIEVOBOX_ROOT"), "logs"), create_new=False
+    )
 
     debug_segments = decode_tokens_with_mask_debug(tokenizer, token_ids, loss_mask)
 
@@ -439,6 +469,13 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     print("rollout_id: ", rollout_id)
     current_version = rollout_id + 1
 
+    # rollout 阶段每个 group 的 reward 分布 / 过滤原因，落到独立 JSONL 文件
+    run_dir = get_or_create_run_dir(
+        os.path.join(get_env("AIEVOBOX_ROOT"), "logs"), create_new=False
+    )
+    debug_log_dir = os.path.join(run_dir, "rollout_debug")
+    group_debug_logger = RolloutGroupDebugLogger(debug_log_dir, rollout_id)
+
     # 根据weight_version过滤已完成的数据
     off_by_n = int(get_env("RL_OFF_BY_N"))
     dapo_filter_enabled = os.environ.get("DAPO_filter", "true").strip().lower() in ("1", "true", "yes", "on")
@@ -465,6 +502,11 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                 metrics.record("used/weight_version", float(meta.get("weight_version", 0)), AggType.MEAN)
         metrics.record("used/count", float(sum(len(g) for g in final_return_results)), AggType.SUM)
         metrics.push(step=rollout_id)
+        group_debug_logger.write_summary(
+            note="buffer_prefilled_early_return",
+            buffer_length=int(buffer_length),
+            target_batch_size=int(args.rollout_batch_size),
+        )
         return final_return_results
     base_url = args.rollout_buffer_url
     tokenizer = TOKENIZER
@@ -505,6 +547,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
 
             # 按 instance_id 分组
             grouped_results = group_by_instance_id(raw_results)
+            group_debug_logger.start_round()
 
             # 按 group 过滤：group 中所有 sample 都必须符合版本要求
             valid_groups = []
@@ -515,6 +558,13 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                         f"Filtered out group with rewards={rewards}, "
                         f"current_version={current_version}"
                     )
+                    group_debug_logger.log_group(
+                        group,
+                        status=STATUS_DAPO_ALL_SAME,
+                        reason=f"all rewards equal: {rewards[0]}",
+                        n_samples_per_prompt=int(args.n_samples_per_prompt),
+                        current_version=current_version,
+                    )
                     continue
                 if all(current_version - record.get("weight_version", 0) <= off_by_n for record in group):
                     valid_groups.append(group)
@@ -524,6 +574,13 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                     logger.info(
                         f"Filtered out group with weight_versions={versions}, "
                         f"current_version={current_version}, off_by_n={off_by_n}"
+                    )
+                    group_debug_logger.log_group(
+                        group,
+                        status=STATUS_WEIGHT_VERSION_SKEW,
+                        reason=f"weight_version skew > off_by_n={off_by_n}",
+                        n_samples_per_prompt=int(args.n_samples_per_prompt),
+                        current_version=current_version,
                     )
 
             print(f"✅ Valid groups collected this round: {len(valid_groups)}")
@@ -549,6 +606,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                 for group_record in valid_groups:
                     group_results = []
                     drop_group = False
+                    drop_status: Optional[str] = None
+                    drop_reason: Optional[str] = None
                     group_training_infos = training_info_results[result_offset:result_offset + len(group_record)]
                     result_offset += len(group_record)
 
@@ -565,6 +624,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                                 exc_info=(type(training_info), training_info, training_info.__traceback__),
                             )
                             drop_group = True
+                            drop_status = STATUS_DROP_ASSEMBLY_ERROR
+                            drop_reason = f"training_info exception: {type(training_info).__name__}: {training_info}"
                             break
 
                         try:
@@ -581,6 +642,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                                     group_id,
                                 )
                                 drop_group = True
+                                drop_status = STATUS_DROP_UNMATCHED_TRAJECTORY
+                                drop_reason = "training_info returned empty tokens/mask"
                                 break
                             if max_length is not None and len(tokens) > max_length:
                                 tokens = tokens[:max_length]
@@ -610,7 +673,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                                 sample.multimodal_train_inputs = mm_train_inputs
 
                             group_results.append(sample)
-                        except Exception:
+                        except Exception as exc:
                             logger.exception(
                                 "Drop rollout group due to sample assembly error: instance_id=%s session_id=%s group_id=%s",
                                 record.get("instance_id"),
@@ -618,11 +681,26 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                                 group_id,
                             )
                             drop_group = True
+                            drop_status = STATUS_DROP_ASSEMBLY_ERROR
+                            drop_reason = f"sample assembly raised: {type(exc).__name__}: {exc}"
                             break
 
 
                     if drop_group:
+                        group_debug_logger.log_group(
+                            group_record,
+                            status=drop_status or STATUS_DROP_ASSEMBLY_ERROR,
+                            reason=drop_reason,
+                            n_samples_per_prompt=int(args.n_samples_per_prompt),
+                            current_version=current_version,
+                        )
                         continue
+                    group_debug_logger.log_group(
+                        group_record,
+                        status=STATUS_KEPT,
+                        n_samples_per_prompt=int(args.n_samples_per_prompt),
+                        current_version=current_version,
+                    )
                     sample_results.append(group_results)
             finally:
                 if TRAJECTORY_MASK_BUILDER is not None:
@@ -665,6 +743,15 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
             metrics.record("used/weight_version", float(meta.get("weight_version", 0)), AggType.MEAN)
     metrics.record("used/count", float(sum(len(g) for g in final_return_results)), AggType.SUM)
     metrics.push(step=rollout_id)
+
+    group_debug_logger.write_summary(
+        retry_times=retry_times,
+        buffer_length=int(data_buffer.get_buffer_length()),
+        target_batch_size=int(args.rollout_batch_size),
+        n_samples_per_prompt=int(args.n_samples_per_prompt),
+        off_by_n=off_by_n,
+        dapo_filter_enabled=dapo_filter_enabled,
+    )
 
     return final_return_results
 

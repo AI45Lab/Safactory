@@ -24,6 +24,11 @@ export AIEVOBOX_SQLITE_BULK_INSERT_PAUSE_S=0.01
 export RL_GROUP_SIZE=8
 export RL_EPOCH=10
 export RL_OFF_BY_N=0
+# DAPO filter: when true, drops groups where all samples have the same reward.
+# Disabled for osgym cold-start: with sparse terminal rewards on 15-20 step
+# trajectories, almost every group is all-zero early in training, so the
+# filter discards ~96% of rollouts and starves the learner.
+# export DAPO_filter="${DAPO_filter:-false}"
 
 # no use, will be removed
 export RL_MODEL=model
@@ -59,3 +64,20 @@ export SLIME_ROLLBUF_RESTART_TRAINING=True
 export SLIME_N_SAMPLES_PER_PROMPT=$RL_GROUP_SIZE
 export SLIME_GLOBAL_BATCH_SIZE=256
 export SLIME_ROLLOUT_BATCH_SIZE=$((SLIME_GLOBAL_BATCH_SIZE / RL_GROUP_SIZE))
+
+# -------------------------------------------
+# Debug (debugpy / VS Code)
+# -------------------------------------------
+# Set DEBUGPY_<NAME>=1 to start a debugpy listener inside the matching process.
+# Ports default to those used by .vscode/launch.json. Override with DEBUGPY_<NAME>_PORT.
+# Set DEBUGPY_WAIT_FOR_CLIENT=1 to block startup until VS Code attaches —
+# useful when you need to break inside early init (e.g. tokenizer load).
+#
+# slime_rollout is a single python process that also hosts the in-process
+# llm_proxy thread, so one attach covers breakpoints in both slime_generator.py
+# and llm_proxy.py.
+export DEBUGPY_BUFFER_SERVER="${DEBUGPY_BUFFER_SERVER:-0}"
+export DEBUGPY_BUFFER_SERVER_PORT="${DEBUGPY_BUFFER_SERVER_PORT:-5678}"
+export DEBUGPY_SLIME_ROLLOUT="${DEBUGPY_SLIME_ROLLOUT:-0}"
+export DEBUGPY_SLIME_ROLLOUT_PORT="${DEBUGPY_SLIME_ROLLOUT_PORT:-5681}"
+export DEBUGPY_WAIT_FOR_CLIENT="${DEBUGPY_WAIT_FOR_CLIENT:-0}"

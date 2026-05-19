@@ -10,10 +10,7 @@ from slime.utils.processing_utils import encode_image_for_rollout_engine
 logger = logging.getLogger(__name__)
 THINK_BLOCK_RE = re.compile(r"\s*<think>.*?</think>\s*", re.DOTALL)
 
-BASE_CHAT_HISTORY = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "I am a user."},
-]
+BASE_CHAT_HISTORY = []
 
 
 @dataclass
@@ -43,22 +40,26 @@ class TrajectoryMaskBuilder:
         self.tokenizer = tokenizer
         self.processor = processor
         self.session_roots: Dict[str, MessageNode] = {}
-        self.base_messages_str = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
-            add_generation_prompt=False,
-            tokenize=False,
-        )
+        if BASE_CHAT_HISTORY:
+            self.base_messages_str = self.tokenizer.apply_chat_template(
+                BASE_CHAT_HISTORY,
+                add_generation_prompt=False,
+                tokenize=False,
+            )
+        else:
+            self.base_messages_str = ""
         self.generation_tokens = self._init_generation_tokens()
         self.suffix = self._init_suffix_tokens()
 
     def _init_generation_tokens(self) -> List[int]:
+        test_conversation = BASE_CHAT_HISTORY + [{"role": "user", "content": "hi"}]
         without_gen = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
+            test_conversation,
             add_generation_prompt=False,
             tokenize=False,
         )
         with_gen = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY,
+            test_conversation,
             add_generation_prompt=True,
             tokenize=False,
         )
@@ -70,8 +71,12 @@ class TrajectoryMaskBuilder:
         if eos_id is None:
             return []
 
+        test_conversation = BASE_CHAT_HISTORY + [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "response"},
+        ]
         test_tokens = self.tokenizer.apply_chat_template(
-            BASE_CHAT_HISTORY + [{"role": "assistant", "content": "response"}],
+            test_conversation,
             add_generation_prompt=False,
             tokenize=True,
         )
@@ -298,6 +303,7 @@ class TrajectoryMaskBuilder:
         Optional[Dict[str, Any]],
     ]:
         node = self.session_roots.get(session_id)
+        was_new_session = node is None
         if node is None:
             node = MessageNode(raw_message=None, model_input_message=None)
             self.session_roots[session_id] = node
@@ -310,6 +316,7 @@ class TrajectoryMaskBuilder:
         image_data: List[str] = []
         mm_train_inputs: Optional[Dict[str, Any]] = None
 
+        first_mismatch_role: Optional[str] = None
         for message in messages:
             child = None
             for candidate in reversed(node.children):
@@ -319,6 +326,7 @@ class TrajectoryMaskBuilder:
                     child = candidate
                     break
             if child is None:
+                first_mismatch_role = message.get("role") if isinstance(message, dict) else None
                 break
             if child.model_input_message is not None:
                 model_input_messages.append(child.model_input_message)
@@ -330,6 +338,34 @@ class TrajectoryMaskBuilder:
             mm_train_inputs = self._concat_mm_train_inputs(mm_train_inputs, child.delta_mm_train_inputs)
             node = child
             matched += 1
+
+        # Visibility into prefix-tree alignment: if the cache miss is on an
+        # *assistant* turn, that's a red flag — assistant outputs come from
+        # this builder, so a miss usually means tokenization changed between
+        # write (record_generation) and read (this call). On a *user/tool*
+        # miss the upstream env produced a new turn, which is expected.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "match_prefix: session=%s new_session=%s matched=%d/%d tokens=%d "
+                "mask1=%d images=%d mismatch_role=%s",
+                session_id,
+                was_new_session,
+                matched,
+                len(messages),
+                len(tokens),
+                sum(response_mask),
+                len(images),
+                first_mismatch_role,
+            )
+        if first_mismatch_role == "assistant":
+            logger.warning(
+                "Prefix mismatch on assistant turn: session=%s matched=%d/%d "
+                "(this often means the assistant text was retokenized differently "
+                "between record_generation and the next prepare_generate_input)",
+                session_id,
+                matched,
+                len(messages),
+            )
 
         return (
             node,
@@ -419,6 +455,22 @@ class TrajectoryMaskBuilder:
             delta_mm_train_inputs=None,
         )
         parent.children.append(node)
+
+        # The mask layout we just wrote is the canonical one used during
+        # training: prefix(generation_prompt)=0 | output_ids=1 | suffix=0.
+        # If get_training_info later returns a different shape, alignment is
+        # broken — this debug line lets us see the per-turn shape on disk.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "append_assistant: gen_prefix=%d output=%d suffix=%d "
+                "delta_tokens=%d delta_mask1=%d text_len=%d",
+                len(self.generation_tokens),
+                len(output_ids),
+                len(self.suffix),
+                len(delta_tokens),
+                sum(delta_response_mask),
+                len(assistant_text),
+            )
         return node
 
     def _ensure_path(
@@ -453,6 +505,17 @@ class TrajectoryMaskBuilder:
         )
         input_ids = list(tokens)
         input_ids.extend(self.generation_tokens)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "prepare_generate_input: session=%s messages=%d cached_tokens=%d "
+                "gen_prompt=%d input_ids=%d images=%d",
+                session_id,
+                len(messages),
+                len(tokens),
+                len(self.generation_tokens),
+                len(input_ids),
+                len(image_data),
+            )
         return PreparedPrompt(
             node=node,
             model_input_messages=model_input_messages,
@@ -470,12 +533,20 @@ class TrajectoryMaskBuilder:
         finish_reason: Optional[str] = None,
     ) -> MessageNode:
         del output_logprobs
-        return self._append_assistant_message(
+        node = self._append_assistant_message(
             parent=prepared_prompt.node,
             output_ids=list(output_ids),
             assistant_text=assistant_text,
             finish_reason=finish_reason,
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "record_generation: output_ids=%d finish=%s text_len=%d",
+                len(output_ids),
+                finish_reason,
+                len(assistant_text),
+            )
+        return node
 
     def get_training_info(
         self,
@@ -487,17 +558,67 @@ class TrajectoryMaskBuilder:
             messages,
         )
         if matched != len(messages) or node.raw_message is None:
+            cached_children = (
+                len(self.session_roots[session_id].children)
+                if session_id in self.session_roots
+                else 0
+            )
+            mismatch_role = (
+                messages[matched].get("role")
+                if matched < len(messages) and isinstance(messages[matched], dict)
+                else None
+            )
             logger.warning(
-                "get_training_info failed: session=%s, has_data=%s, matched=%s, expected=%s",
+                "get_training_info failed (no full match): session=%s matched=%d/%d "
+                "mismatch_role=%s session_known=%s root_children=%d "
+                "tokens_so_far=%d mask1_so_far=%d",
                 session_id,
-                session_id in self.session_roots and bool(self.session_roots[session_id].children),
                 matched,
                 len(messages),
+                mismatch_role,
+                session_id in self.session_roots,
+                cached_children,
+                len(tokens),
+                sum(response_mask),
             )
             return [], [], [], "", None
 
         if mm_train_inputs is None and self.processor is not None and images:
             mm_train_inputs = self._build_mm_train_inputs_for_images(images)
+
+        # Hard sanity check: tokens and response_mask must always agree in
+        # length. If they don't, downstream loss masking is silently wrong.
+        if len(tokens) != len(response_mask):
+            logger.error(
+                "Mask alignment failure: session=%s len(tokens)=%d != "
+                "len(response_mask)=%d — this WILL miscompute loss",
+                session_id,
+                len(tokens),
+                len(response_mask),
+            )
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "get_training_info ok: session=%s messages=%d tokens=%d mask1=%d "
+                "messages_str_len=%d images=%d mm_inputs=%s",
+                session_id,
+                len(messages),
+                len(tokens),
+                sum(response_mask),
+                len(messages_str),
+                len(image_data),
+                bool(mm_train_inputs),
+            )
+        else:
+            # Even at INFO, surface the per-session totals once — they're
+            # the load-bearing numbers for confirming alignment in prod.
+            logger.info(
+                "training_info: session=%s tokens=%d trainable=%d images=%d",
+                session_id,
+                len(tokens),
+                sum(response_mask),
+                len(image_data),
+            )
 
         return (
             tokens,
@@ -508,4 +629,7 @@ class TrajectoryMaskBuilder:
         )
 
     def clear_session(self, session_id: str) -> None:
+        existed = session_id in self.session_roots
         self.session_roots.pop(session_id, None)
+        if existed:
+            logger.debug("clear_session: %s", session_id)

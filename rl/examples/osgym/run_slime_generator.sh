@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
 MEGATRON_ARGS=(
    --train-backend megatron
    --megatron-to-hf-mode bridge
-   --tensor-model-parallel-size 2 # tp
+   --tensor-model-parallel-size 1 # tp
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
@@ -119,7 +119,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-s
 
 export SGLANG_LOGGING_CONFIG_PATH=${SGLANG_LOGGING_CONFIG_PATH:-"/mnt/shared-storage-user/chenxinquan/Safactory/rl/sglang_logging.json"}
 
-echo "Debug settings: DEBUG_SLIME_TRAIN=${DEBUG_SLIME_TRAIN:-0}, DEBUG_SLIME_ROLLOUT=${DEBUG_SLIME_ROLLOUT}, DEBUGPY_ROLLOUT_PORT=${DEBUGPY_ROLLOUT_PORT}, DEBUGPY_WAIT_FOR_CLIENT=${DEBUGPY_WAIT_FOR_CLIENT}"
+echo "Debug settings: DEBUGPY_BUFFER_SERVER=${DEBUGPY_BUFFER_SERVER}, DEBUGPY_SLIME_ROLLOUT=${DEBUGPY_SLIME_ROLLOUT}, DEBUGPY_SLIME_ROLLOUT_PORT=${DEBUGPY_SLIME_ROLLOUT_PORT}, DEBUGPY_WAIT_FOR_CLIENT=${DEBUGPY_WAIT_FOR_CLIENT}"
 
 RUNTIME_ENV_JSON="{\
   \"env_vars\": {\
@@ -127,7 +127,10 @@ RUNTIME_ENV_JSON="{\
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",\
     \"LLM_PROXY_URL\": \"${LLM_PROXY_URL}\",\
     \"ROLLOUT_BUFFER_URL\": \"${ROLLOUT_BUFFER_URL}\",\
-    \"SLIME_OFF_BY_N\": \"${SLIME_OFF_BY_N:-0}\"\
+    \"SLIME_OFF_BY_N\": \"${SLIME_OFF_BY_N:-0}\",\
+    \"DEBUGPY_SLIME_ROLLOUT\": \"${DEBUGPY_SLIME_ROLLOUT:-0}\",\
+    \"DEBUGPY_SLIME_ROLLOUT_PORT\": \"${DEBUGPY_SLIME_ROLLOUT_PORT:-5681}\",\
+    \"DEBUGPY_WAIT_FOR_CLIENT\": \"${DEBUGPY_WAIT_FOR_CLIENT:-0}\"\
   }\
 }"
 
@@ -135,8 +138,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 ${SLIME_HOME}/train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
-   --rollout-num-gpus 2 \
+   --actor-num-gpus-per-node 1 \
+   --rollout-num-gpus 3 \
    ${MODEL_ARGS[@]} \
    ${MEGATRON_ARGS[@]} \
    ${CKPT_ARGS[@]} \

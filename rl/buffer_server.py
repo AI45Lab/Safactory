@@ -10,7 +10,6 @@ import time
 import uuid
 import numpy as np
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional
 
 # Add rl directory to path for utils import
@@ -18,7 +17,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from utils import get_env
+from utils import get_env, setup_process_logging, start_debugpy
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -31,33 +30,22 @@ if AIEVOBOX_ROOT not in sys.path:
 
 from core.data_manager.manager import DataManager
 
-# Setup logging
-LOG_DIR = os.path.join(AIEVOBOX_ROOT, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "buffer_server.log")
+# buffer_server is the session leader: it creates the per-run folder under
+# logs/<timestamp>/ and registers it via .current_run + AIEVOBOX_RUN_DIR so
+# llm_proxy / slime_generator / launcher land in the same dir. Logs from
+# every named logger in this process flow through the root handler — chatty
+# deps are pinned at WARNING by setup_process_logging.
+RUN_DIR = setup_process_logging(
+    "buffer_server",
+    logs_root=os.path.join(AIEVOBOX_ROOT, "logs"),
+    create_new_run_dir=True,
+    run_name=os.environ.get("AIEVOBOX_RUN_NAME"),
+)
+LOG_FILE = os.path.join(RUN_DIR, "buffer_server.log")
 
 logger = logging.getLogger("buffer_server")
-logger.setLevel(logging.DEBUG)
-
-# File handler with rotation
-file_handler = RotatingFileHandler(
-    LOG_FILE, maxBytes=50*1024*1024, backupCount=5, encoding="utf-8"
-)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-))
-logger.addHandler(file_handler)
-
-# Console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s"
-))
-logger.addHandler(console_handler)
-
-logger.info(f"Buffer Server logging to: {LOG_FILE}")
+logger.info("Buffer Server logging to: %s", LOG_FILE)
+logger.info("Run directory: %s", RUN_DIR)
 
 app = FastAPI(title="Rollout Buffer Server", debug=True)
 
@@ -404,6 +392,7 @@ async def health_check():
 
 
 if __name__ == "__main__":
+    start_debugpy("buffer_server", default_port=5678)
     port = int(get_env("BUFFER_SERVER_PORT"))
     uvicorn.run(
         app,

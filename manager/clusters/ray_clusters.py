@@ -260,7 +260,8 @@ class RemoteRayJobBackend(ClusterBackend):
         for env_name, req in required_counts.items():
             req_i = max(1, int(req or 1))
             required_counts[env_name] = req_i
-            create_counts[env_name] = max(req_i, (req_i * 13 + 9) // 10)
+            # create_counts[env_name] = max(req_i, (req_i * 13 + 9) // 10)
+            create_counts[env_name] = req_i
 
         # 1) create RayJobs (over-provisioned)
         tasks: List[asyncio.Task] = []
