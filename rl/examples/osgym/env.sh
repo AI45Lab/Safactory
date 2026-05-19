@@ -28,7 +28,7 @@ export RL_OFF_BY_N=0
 # Disabled for osgym cold-start: with sparse terminal rewards on 15-20 step
 # trajectories, almost every group is all-zero early in training, so the
 # filter discards ~96% of rollouts and starves the learner.
-# export DAPO_filter="${DAPO_filter:-false}"
+export DAPO_filter="${DAPO_filter:-false}"
 
 # no use, will be removed
 export RL_MODEL=model

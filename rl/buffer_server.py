@@ -66,6 +66,11 @@ last_served_id: int = 0
 # Pending items by instance_id (for grouping)
 pending_items_by_instance: Dict[str, List[Dict[str, Any]]] = {}
 
+# Monotonic ready-group sequence per instance_id. This is separate from
+# group_id: group_id identifies the prompt/task, while rollout_group_key
+# identifies one popped batch of group_size samples for GRPO.
+ready_group_sequence_by_instance: Dict[str, int] = {}
+
 # Group size (set by /start_rollout)
 group_size: int = 1
 
@@ -125,6 +130,7 @@ def _build_item_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "group_id": group_id,
         "weight_version": weight_version,
         "truncated": row.get("truncated", False),
+        "is_session_completed": row.get("is_session_completed", False),
     }
 
     return {
@@ -170,7 +176,7 @@ async def fetch_new_items_from_db(limit: Optional[int] = None) -> List[Dict[str,
 
 def accumulate_and_pop_ready_groups(new_items: List[Dict[str, Any]]) -> tuple:
     """Accumulate items and return ready groups."""
-    global pending_items_by_instance, group_size
+    global pending_items_by_instance, ready_group_sequence_by_instance, group_size
 
     ready_groups = []
     finished_instance_ids = []
@@ -188,7 +194,13 @@ def accumulate_and_pop_ready_groups(new_items: List[Dict[str, Any]]) -> tuple:
         while len(bucket) >= group_size:
             group = bucket[:group_size]
             del bucket[:group_size]
-            ready_groups.append((instance_id, list(group)))
+            seq = ready_group_sequence_by_instance.get(instance_id, 0)
+            ready_group_sequence_by_instance[instance_id] = seq + 1
+            rollout_group_key = f"{instance_id}:{seq}"
+            for item in group:
+                extra_info = item.setdefault("extra_info", {})
+                extra_info["rollout_group_key"] = rollout_group_key
+            ready_groups.append((instance_id, rollout_group_key, list(group)))
             finished_instance_ids.append(instance_id)
         if not bucket:
             to_delete.append(instance_id)
@@ -212,7 +224,7 @@ async def get_rollout_data(request: Request):
     logger.info(f"new_items={len(new_items)}, ready_groups={len(ready_groups)}, pending={pending_counts}")
 
     # Flatten groups to items
-    ready_items = [item for _, group in ready_groups for item in group]
+    ready_items = [item for _, _, group in ready_groups for item in group]
     rewards = [float(item.get("reward", 0.0)) for item in ready_items]
 
     total_samples = len(ready_items)
@@ -279,7 +291,7 @@ def start_aievobox_process(data: dict):
     NOTE: LLM Proxy is now hosted in-process by slime_generator.
     It must already be running before this function is called.
     """
-    global aievobox_process, group_size, last_served_id, pending_items_by_instance, data_manager
+    global aievobox_process, group_size, last_served_id, pending_items_by_instance, ready_group_sequence_by_instance, data_manager
 
     # Set group size (num_repeat_per_sample)
     group_size = int(data.get("num_repeat_per_sample", 16))
@@ -288,6 +300,7 @@ def start_aievobox_process(data: dict):
     restart_training = data.get("restart_training", False)
     if restart_training:
         pending_items_by_instance.clear()
+        ready_group_sequence_by_instance.clear()
         logger.info("restart_training=True, cleared pending items")
 
     # Keep a single job_session for both reader and writer process.

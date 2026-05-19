@@ -7,6 +7,7 @@ from .rollout_debug import (
     STATUS_WEIGHT_VERSION_SKEW,
     STATUS_DROP_UNMATCHED_TRAJECTORY,
     STATUS_DROP_ASSEMBLY_ERROR,
+    STATUS_GROUP_SIZE_MISMATCH,
 )
 from .run_dir import get_or_create_run_dir
 from .log_setup import setup_process_logging
@@ -22,6 +23,7 @@ __all__ = [
     "STATUS_WEIGHT_VERSION_SKEW",
     "STATUS_DROP_UNMATCHED_TRAJECTORY",
     "STATUS_DROP_ASSEMBLY_ERROR",
+    "STATUS_GROUP_SIZE_MISMATCH",
     "get_or_create_run_dir",
     "setup_process_logging",
     "start_debugpy",

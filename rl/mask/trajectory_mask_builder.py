@@ -379,6 +379,115 @@ class TrajectoryMaskBuilder:
             mm_train_inputs,
         )
 
+    def _accumulate_nodes(
+        self,
+        nodes: List[MessageNode],
+    ) -> Tuple[
+        MessageNode,
+        int,
+        List[Dict[str, Any]],
+        str,
+        List[int],
+        List[int],
+        List[Any],
+        List[str],
+        Optional[Dict[str, Any]],
+    ]:
+        model_input_messages: List[Dict[str, Any]] = []
+        messages_str = ""
+        tokens: List[int] = []
+        response_mask: List[int] = []
+        images: List[Any] = []
+        image_data: List[str] = []
+        mm_train_inputs: Optional[Dict[str, Any]] = None
+
+        for node in nodes:
+            if node.model_input_message is not None:
+                model_input_messages.append(node.model_input_message)
+            messages_str += node.delta_message_str
+            tokens.extend(node.delta_tokens)
+            response_mask.extend(node.delta_response_mask)
+            images.extend(node.delta_images)
+            image_data.extend(node.delta_image_data)
+            mm_train_inputs = self._concat_mm_train_inputs(mm_train_inputs, node.delta_mm_train_inputs)
+
+        return (
+            nodes[-1],
+            len(nodes),
+            model_input_messages,
+            messages_str,
+            tokens,
+            response_mask,
+            images,
+            image_data,
+            mm_train_inputs,
+        )
+
+    def _match_from_node(
+        self,
+        start_node: MessageNode,
+        messages: List[Dict[str, Any]],
+    ) -> Optional[List[MessageNode]]:
+        if not messages or start_node.raw_message is None:
+            return None
+        if not self._message_matches(start_node.raw_message, messages[0]):
+            return None
+
+        path = [start_node]
+        node = start_node
+        for message in messages[1:]:
+            child = None
+            for candidate in reversed(node.children):
+                if candidate.raw_message is None:
+                    continue
+                if self._message_matches(candidate.raw_message, message):
+                    child = candidate
+                    break
+            if child is None:
+                return None
+            path.append(child)
+            node = child
+        return path
+
+    def _iter_nodes_newest_first(self, root: MessageNode):
+        stack = list(root.children)
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(node.children)
+
+    def _match_trimmed_window(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> Optional[
+        Tuple[
+            MessageNode,
+            int,
+            List[Dict[str, Any]],
+            str,
+            List[int],
+            List[int],
+            List[Any],
+            List[str],
+            Optional[Dict[str, Any]],
+        ]
+    ]:
+        root = self.session_roots.get(session_id)
+        if root is None or not messages:
+            return None
+
+        for candidate in self._iter_nodes_newest_first(root):
+            path = self._match_from_node(candidate, messages)
+            if path is not None:
+                logger.info(
+                    "get_training_info matched trimmed window: session=%s messages=%d",
+                    session_id,
+                    len(messages),
+                )
+                return self._accumulate_nodes(path)
+        return None
+
     def _add_prompt_message(
         self,
         parent: MessageNode,
@@ -558,30 +667,34 @@ class TrajectoryMaskBuilder:
             messages,
         )
         if matched != len(messages) or node.raw_message is None:
-            cached_children = (
-                len(self.session_roots[session_id].children)
-                if session_id in self.session_roots
-                else 0
-            )
-            mismatch_role = (
-                messages[matched].get("role")
-                if matched < len(messages) and isinstance(messages[matched], dict)
-                else None
-            )
-            logger.warning(
-                "get_training_info failed (no full match): session=%s matched=%d/%d "
-                "mismatch_role=%s session_known=%s root_children=%d "
-                "tokens_so_far=%d mask1_so_far=%d",
-                session_id,
-                matched,
-                len(messages),
-                mismatch_role,
-                session_id in self.session_roots,
-                cached_children,
-                len(tokens),
-                sum(response_mask),
-            )
-            return [], [], [], "", None
+            trimmed_match = self._match_trimmed_window(session_id, messages)
+            if trimmed_match is not None:
+                node, matched, _model_input_messages, messages_str, tokens, response_mask, images, image_data, mm_train_inputs = trimmed_match
+            else:
+                cached_children = (
+                    len(self.session_roots[session_id].children)
+                    if session_id in self.session_roots
+                    else 0
+                )
+                mismatch_role = (
+                    messages[matched].get("role")
+                    if matched < len(messages) and isinstance(messages[matched], dict)
+                    else None
+                )
+                logger.warning(
+                    "get_training_info failed (no full match): session=%s matched=%d/%d "
+                    "mismatch_role=%s session_known=%s root_children=%d "
+                    "tokens_so_far=%d mask1_so_far=%d",
+                    session_id,
+                    matched,
+                    len(messages),
+                    mismatch_role,
+                    session_id in self.session_roots,
+                    cached_children,
+                    len(tokens),
+                    sum(response_mask),
+                )
+                return [], [], [], "", None
 
         if mm_train_inputs is None and self.processor is not None and images:
             mm_train_inputs = self._build_mm_train_inputs_for_images(images)

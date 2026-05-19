@@ -28,6 +28,7 @@ STATUS_DAPO_ALL_SAME = "dapo_all_same"
 STATUS_WEIGHT_VERSION_SKEW = "weight_version_skew"
 STATUS_DROP_UNMATCHED_TRAJECTORY = "drop_unmatched_trajectory"
 STATUS_DROP_ASSEMBLY_ERROR = "drop_assembly_error"
+STATUS_GROUP_SIZE_MISMATCH = "group_size_mismatch"
 
 ALL_STATUSES = (
     STATUS_KEPT,
@@ -35,6 +36,7 @@ ALL_STATUSES = (
     STATUS_WEIGHT_VERSION_SKEW,
     STATUS_DROP_UNMATCHED_TRAJECTORY,
     STATUS_DROP_ASSEMBLY_ERROR,
+    STATUS_GROUP_SIZE_MISMATCH,
 )
 
 # extra_info 中可能有用、需要原样落盘的字段

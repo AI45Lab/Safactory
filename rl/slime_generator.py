@@ -29,6 +29,7 @@ from rl.utils import (
     STATUS_WEIGHT_VERSION_SKEW,
     STATUS_DROP_UNMATCHED_TRAJECTORY,
     STATUS_DROP_ASSEMBLY_ERROR,
+    STATUS_GROUP_SIZE_MISMATCH,
     get_or_create_run_dir,
     setup_process_logging,
     start_debugpy,
@@ -322,11 +323,17 @@ def _get_record_training_info(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def group_by_instance_id(results: List[Dict]) -> List[List[Dict]]:
-    """按 instance_id 将样本分组。
+def group_rollout_results(results: List[Dict], n_samples_per_prompt: int) -> List[List[Dict]]:
+    """Group rollout samples while preserving ready-group boundaries.
+
+    New buffer_server responses carry ``extra_info.rollout_group_key`` so
+    multiple ready groups from the same instance_id are not merged. For older
+    data without that key, fall back to instance_id and split in fixed-size
+    chunks.
 
     Args:
         results: 样本列表，每个样本必须包含 instance_id
+        n_samples_per_prompt: expected GRPO group size
 
     Returns:
         分组后的样本列表 List[List[Dict]]
@@ -336,14 +343,35 @@ def group_by_instance_id(results: List[Dict]) -> List[List[Dict]]:
 
     groups = {}
     for item in results:
+        extra_info = item.get("extra_info") or {}
         instance_id = item.get("instance_id")
         if instance_id is None:
             raise ValueError("instance_id must be in item")
-        if instance_id not in groups:
-            groups[instance_id] = []
-        groups[instance_id].append(item)
+        group_key = extra_info.get("rollout_group_key")
+        if group_key is None:
+            group_key = f"legacy:{instance_id}"
+        if group_key not in groups:
+            groups[group_key] = []
+        groups[group_key].append(item)
 
-    return list(groups.values())
+    grouped = []
+    expected_size = max(1, int(n_samples_per_prompt))
+    for key, group in groups.items():
+        if not str(key).startswith("legacy:"):
+            grouped.append(group)
+            continue
+        for start in range(0, len(group), expected_size):
+            grouped.append(group[start:start + expected_size])
+    return grouped
+
+
+def _should_clear_trajectory_session(record: Dict[str, Any]) -> bool:
+    extra_info = record.get("extra_info") or {}
+    return bool(
+        extra_info.get("is_session_completed")
+        or extra_info.get("truncated")
+        or extra_info.get("finish_reason") == "length"
+    )
 
 
 async def get_rollout_data(api_base_url: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -545,13 +573,33 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                 metrics.record("fetched/weight_version", float(record["weight_version"]), AggType.MEAN)
             metrics.record("fetched/count", float(len(raw_results)), AggType.SUM)
 
-            # 按 instance_id 分组
-            grouped_results = group_by_instance_id(raw_results)
+            # 按 buffer_server 产出的 ready-group 边界分组；旧数据缺少 key 时按固定 group size 切块。
+            grouped_results = group_rollout_results(raw_results, int(args.n_samples_per_prompt))
             group_debug_logger.start_round()
 
             # 按 group 过滤：group 中所有 sample 都必须符合版本要求
             valid_groups = []
             for group in grouped_results:
+                if len(group) != int(args.n_samples_per_prompt):
+                    logger.warning(
+                        "Drop rollout group due to size mismatch: actual=%d expected=%d "
+                        "instance_ids=%s rollout_group_keys=%s",
+                        len(group),
+                        int(args.n_samples_per_prompt),
+                        sorted({str(record.get("instance_id")) for record in group}),
+                        sorted({
+                            str((record.get("extra_info") or {}).get("rollout_group_key"))
+                            for record in group
+                        }),
+                    )
+                    group_debug_logger.log_group(
+                        group,
+                        status=STATUS_GROUP_SIZE_MISMATCH,
+                        reason=f"group size mismatch: actual={len(group)} expected={int(args.n_samples_per_prompt)}",
+                        n_samples_per_prompt=int(args.n_samples_per_prompt),
+                        current_version=current_version,
+                    )
+                    continue
                 rewards = [record.get("reward") for record in group]
                 if dapo_filter_enabled and len(set(rewards)) == 1:
                     logger.info(
@@ -586,12 +634,13 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
             print(f"✅ Valid groups collected this round: {len(valid_groups)}")
 
             sample_results = []
-            # 包含所有本轮拉到的 session（含被 dapo / off_by_n 过滤掉的 group）
-            touched_session_ids = set()
+            # 只清理已结束 session。message_cut>0 时中间 step 也是 trainable；
+            # 若被 DAPO/版本过滤，后续 step 仍需要同一 session 的轨迹缓存。
+            clearable_session_ids = set()
             for record in raw_results:
                 session_id = record.get("extra_info", {}).get("session_id", "")
-                if session_id:
-                    touched_session_ids.add(session_id)
+                if session_id and _should_clear_trajectory_session(record):
+                    clearable_session_ids.add(session_id)
             try:
                 flat_records = [record for group_record in valid_groups for record in group_record]
 
@@ -704,7 +753,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                     sample_results.append(group_results)
             finally:
                 if TRAJECTORY_MASK_BUILDER is not None:
-                    for session_id in touched_session_ids:
+                    for session_id in clearable_session_ids:
                         TRAJECTORY_MASK_BUILDER.clear_session(session_id)
             data_buffer.add_samples(sample_results)
             print(
